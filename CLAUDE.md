@@ -27,8 +27,8 @@ No hay proceso de verificación automatizado: los cambios se comprueban abriendo
 
 Todo vive en `game.js` como funciones y variables globales que operan sobre un puñado de variables de estado mutables (`board`, `current`, `next`, `score`, `lines`, `level`, `paused`, `gameOver`, `dropInterval`, `dropAccum`, `animId`). No hay clases ni módulos ES6.
 
-- **Tablero**: matriz `ROWS × COLS` (`createBoard`); cada celda es `0` (vacía) o un índice `1–7` en `COLORS`/`PIECES` que identifica el tipo de pieza.
-- **Piezas**: `PIECES` define las 7 formas estándar como matrices cuadradas. `rotateCW` rota transponiendo y luego invirtiendo filas — no hay tabla SRS, solo esta rotación simple.
+- **Tablero**: matriz `ROWS × COLS` (`createBoard`); cada celda es `0` (vacía) o un índice `1–8` en `COLORS`/`PIECES` que identifica el tipo de pieza.
+- **Piezas**: `PIECES` define las 7 formas estándar más una pieza reto "tuerca" (`N`, índice 8: `[[8,8,8],[8,0,8],[8,8,8]]`, un anillo 3×3 con hueco vacío en el centro) como matrices cuadradas. `randomPiece` elige el tipo con `PIECES.length - 1` para incluir automáticamente cualquier pieza añadida al final del array. `rotateCW` rota transponiendo y luego invirtiendo filas — no hay tabla SRS, solo esta rotación simple.
 - **Colisión** (`collide`): única función que valida límites del tablero y solapes; todo movimiento (mover, rotar, caer) pasa por ella antes de aplicarse.
 - **Wall kicks** (`tryRotate`): tras rotar, prueba desplazamientos `[0, -1, 1, -2, 2]` en `x` hasta encontrar uno sin colisión; si ninguno funciona, la rotación se descarta.
 - **Bucle de juego** (`loop`): un único `requestAnimationFrame` acumula `dt` en `dropAccum`; al superar `dropInterval` baja la pieza una fila o la fija (`lockPiece`) si no puede. `draw()` se llama en cada frame (grid + tablero fijado + ghost piece + pieza actual).
