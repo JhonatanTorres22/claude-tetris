@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tetris clásico implementado en JavaScript vanilla (sin frameworks, sin build, sin dependencias). Tres archivos componen todo el proyecto:
 
-- `index.html` — DOM: canvas del tablero (`#board`, 300×600), canvas de la siguiente pieza (`#next-canvas`, 120×120), panel de score/lines/level, y overlay de pausa/game over.
+- `index.html` — DOM: canvas del tablero (`#board`, 300×600), canvas de la siguiente pieza (`#next-canvas`, 120×120, dentro de `#next-section`, con `#next-label` para el nombre del power-up y la clase `power-incoming` para resaltarlo), panel de score/lines/level, contador `#powerup-countdown` (líneas restantes para el próximo power-up), indicador de estado (`#status-section`, congelado), y overlay de pausa/game over.
 - `style.css` — tema oscuro tipo arcade retro.
 - `game.js` — toda la lógica del juego (~300 líneas, sin módulos, todo en scope global).
 
@@ -37,7 +37,8 @@ Todo vive en `game.js` como funciones y variables globales que operan sobre un p
 - **Ghost piece** (`ghostY`): proyecta hacia abajo la posición final de la pieza actual con `collide`; se dibuja con `globalAlpha = 0.2` antes de la pieza real.
 - **Game over**: se dispara en `spawn()` si la pieza recién generada ya colisiona en su posición inicial.
 - **Input**: un único listener `keydown` global despacha por `e.code` (flechas, `KeyX` para rotar, `Space` para hard drop, `KeyP` para pausa). No hay debounce ni DAS/ARR (repetición de tecla depende del propio navegador).
+- **Power-ups** (`POWERUPS`, `POWERUP_INTERVAL = 10`): cada 10 líneas eliminadas (contador `linesSincePowerUp`, incrementado en `clearLines`), la siguiente pieza generada en `spawn()` es una pieza especial de 1×1 (`randomPowerUpPiece`) en vez de una normal (`pendingPowerUp` marca la transición). Usa índices de color `9–13` (fuera del rango `1–8` de `PIECES`, así `randomPiece` — que solo recorre `PIECES` — nunca la genera por azar) y se dibuja con un glyph (emoji) superpuesto vía `POWERUP_GLYPHS` en `drawBlock`. Cae y se mueve como cualquier pieza, pero en `lockPiece` **no se fusiona al tablero**: en su lugar `applyPowerUp` dispara su efecto (`bombEffect`, `lightningEffect`, `dyeEffect`, `gravityEffect`, `freezeEffect`) y suma `POWERUP_BONUS × level` al score. Efectos: Bomba destruye un 3×3 centrado en la celda de aterrizaje; Rayo limpia toda la fila y columna de esa celda; Tinte detecta el color más frecuente del tablero y elimina todos sus bloques; Gravedad compacta cada columna eliminando huecos; Congelar pone `freezeRemaining = 5000` (ms), que en `loop()` suspende solo el descenso automático (`dropAccum`) sin bloquear el input del jugador — `updateFreezeIndicator()` refleja el conteo en `#status-section`. Ninguno de estos efectos vuelve a llamar a `clearLines` explícitamente salvo el que ya ocurre siempre tras `applyPowerUp` en `lockPiece`.
 
 ### Parámetros ajustables (todos en `game.js`, arriba del archivo)
 
-`COLS`, `ROWS`, `BLOCK`, `COLORS`, `PIECES`, `LINE_SCORES`, `dropInterval` inicial. Si cambias `COLS`/`ROWS`/`BLOCK`, actualiza también `width`/`height` de `<canvas id="board">` en `index.html` (deben ser `COLS×BLOCK` y `ROWS×BLOCK`).
+`COLS`, `ROWS`, `BLOCK`, `COLORS`, `PIECES`, `LINE_SCORES`, `POWERUP_INTERVAL`, `POWERUP_BONUS`, `POWERUPS`, `dropInterval` inicial. Si cambias `COLS`/`ROWS`/`BLOCK`, actualiza también `width`/`height` de `<canvas id="board">` en `index.html` (deben ser `COLS×BLOCK` y `ROWS×BLOCK`). Si añades un power-up nuevo a `POWERUPS`, asígnale un `colorIndex` libre (siguiente entero tras el último usado) y añade su color a `COLORS` en esa misma posición.
