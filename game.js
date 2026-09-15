@@ -35,6 +35,16 @@ const PIECES = [
 
 const LINE_SCORES = [0, 100, 300, 500, 800];
 
+// --- Modo combo y multiplicadores ---
+// Cada limpieza de líneas en turnos consecutivos (sin fijar una pieza "en
+// blanco" entre medio) incrementa `combo`; el score de esa limpieza se
+// multiplica ×combo (x1, x2, x3...). Los T-spins, el Back-to-Back Tetris y
+// el Perfect Clear se calculan en clearLines() y se apilan sobre ese
+// multiplicador.
+const TSPIN_SCORES = [400, 800, 1200, 1600]; // índice = líneas limpiadas en el T-spin (0–3), ×level
+const B2B_MULTIPLIER = 1.5; // aplica cuando un Tetris o T-spin sigue a otro Tetris/T-spin sin interrupción
+const PERFECT_CLEAR_BONUS = 3000; // ×level, al dejar el tablero completamente vacío
+
 // --- Power-ups ---
 // Cada POWERUP_INTERVAL líneas eliminadas, la siguiente pieza generada es un
 // power-up: una pieza especial de 1×1 que cae como cualquier otra. Al fijarse
@@ -72,11 +82,15 @@ const nextSection = document.getElementById('next-section');
 const powerupCountdownEl = document.getElementById('powerup-countdown');
 const statusSection = document.getElementById('status-section');
 const statusEl = document.getElementById('powerup-status');
+const comboSection = document.getElementById('combo-section');
+const comboValueEl = document.getElementById('combo-value');
+const clearEffectEl = document.getElementById('clear-effect');
 
 const THEME_STORAGE_KEY = 'tetris-theme';
 
 let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
 let linesSincePowerUp, pendingPowerUp, freezeRemaining;
+let combo, b2bActive, lastActionWasRotation, pendingTSpin, clearEffectTimeout;
 
 function getCSSVar(name, fallback) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -148,9 +162,29 @@ function tryRotate() {
     if (!collide(rotated, current.x + kick, current.y)) {
       current.shape = rotated;
       current.x += kick;
+      lastActionWasRotation = true;
       return;
     }
   }
+}
+
+// T-spin: solo aplica a la pieza T (type === 3) y únicamente si la última
+// acción del jugador antes de fijar la pieza fue una rotación válida. Se
+// considera T-spin si al menos 3 de las 4 esquinas del cuadro 3×3 de la
+// pieza están ocupadas (por bloques del tablero o por el borde). Debe
+// llamarse ANTES de merge(), con el tablero tal como está sin la pieza.
+function detectTSpinCorners() {
+  const corners = [
+    [current.x, current.y],
+    [current.x + 2, current.y],
+    [current.x, current.y + 2],
+    [current.x + 2, current.y + 2],
+  ];
+  let filled = 0;
+  for (const [x, y] of corners) {
+    if (x < 0 || x >= COLS || y >= ROWS || (y >= 0 && board[y][x])) filled++;
+  }
+  return filled >= 3;
 }
 
 function merge() {
@@ -170,18 +204,71 @@ function clearLines() {
       r++;
     }
   }
-  if (cleared) {
-    lines += cleared;
-    score += (LINE_SCORES[cleared] || 0) * level;
-    level = Math.floor(lines / 10) + 1;
-    dropInterval = Math.max(100, 1000 - (level - 1) * 90);
-    linesSincePowerUp += cleared;
-    while (linesSincePowerUp >= POWERUP_INTERVAL) {
-      linesSincePowerUp -= POWERUP_INTERVAL;
-      pendingPowerUp = true;
+
+  const isTSpin = pendingTSpin;
+  pendingTSpin = false;
+
+  if (cleared === 0) {
+    // Fijar una pieza sin limpiar líneas rompe la cadena de combo (pero NO
+    // rompe el Back-to-Back, que solo se rompe con una limpieza "normal").
+    combo = 0;
+    if (isTSpin) {
+      // T-spin sin líneas: igual da puntos, por la dificultad del giro.
+      score += TSPIN_SCORES[0] * level;
+      showClearEffect('T-SPIN', 'effect-tspin');
+      playSound('tspin');
+      updateHUD();
     }
-    updateHUD();
+    return;
   }
+
+  lines += cleared;
+  combo++;
+
+  const isTetris = cleared === 4;
+  const isDifficult = isTSpin || isTetris; // lo que cuenta para Back-to-Back
+  let clearScore = isTSpin ? TSPIN_SCORES[cleared] * level : (LINE_SCORES[cleared] || 0) * level;
+
+  let label = isTSpin
+    ? `T-SPIN ${['', 'SINGLE', 'DOUBLE', 'TRIPLE'][cleared]}`
+    : isTetris ? 'TETRIS' : `${cleared} LÍNEA${cleared > 1 ? 'S' : ''}`;
+
+  const wasB2B = b2bActive;
+  if (isDifficult && wasB2B) {
+    clearScore = Math.floor(clearScore * B2B_MULTIPLIER);
+    label = `B2B ${label}`;
+  }
+  b2bActive = isDifficult;
+
+  if (combo > 1) {
+    clearScore *= combo;
+    label += `\nCOMBO x${combo}`;
+  }
+
+  score += clearScore;
+
+  level = Math.floor(lines / 10) + 1;
+  dropInterval = Math.max(100, 1000 - (level - 1) * 90);
+  linesSincePowerUp += cleared;
+  while (linesSincePowerUp >= POWERUP_INTERVAL) {
+    linesSincePowerUp -= POWERUP_INTERVAL;
+    pendingPowerUp = true;
+  }
+
+  const isPerfectClear = board.every(row => row.every(v => v === 0));
+  if (isPerfectClear) {
+    score += PERFECT_CLEAR_BONUS * level;
+    label = 'PERFECT CLEAR!';
+  }
+
+  const effectClass = isPerfectClear ? 'effect-perfect'
+    : isDifficult ? 'effect-big'
+    : combo > 1 ? 'effect-combo'
+    : 'effect-normal';
+  showClearEffect(label, effectClass);
+  playSound(isPerfectClear ? 'perfect' : isDifficult ? 'big' : combo > 1 ? 'combo' : 'clear');
+
+  updateHUD();
 }
 
 function applyPowerUp(type) {
@@ -269,8 +356,11 @@ function softDrop() {
 
 function lockPiece() {
   if (current.power) {
+    pendingTSpin = false;
     applyPowerUp(current.power);
   } else {
+    // Debe calcularse ANTES de merge(): necesita el tablero sin la pieza actual.
+    pendingTSpin = current.type === 3 && lastActionWasRotation && detectTSpinCorners();
     merge();
   }
   clearLines();
@@ -282,6 +372,7 @@ function spawn() {
   current = next;
   next = pendingPowerUp ? randomPowerUpPiece() : randomPiece();
   pendingPowerUp = false;
+  lastActionWasRotation = false;
   if (collide(current.shape, current.x, current.y)) {
     endGame();
   }
@@ -293,6 +384,69 @@ function updateHUD() {
   linesEl.textContent = lines;
   levelEl.textContent = level;
   powerupCountdownEl.textContent = POWERUP_INTERVAL - linesSincePowerUp;
+  comboSection.hidden = combo <= 1;
+  if (combo > 1) comboValueEl.textContent = `x${combo}`;
+}
+
+// --- Efectos visuales y sonoros del modo combo ---
+
+function showClearEffect(text, className) {
+  clearEffectEl.textContent = text;
+  clearEffectEl.className = `clear-effect ${className}`;
+  // Fuerza el reflow para poder reiniciar la animación aunque se encadenen
+  // varios efectos seguidos (p. ej. combos rápidos).
+  void clearEffectEl.offsetWidth;
+  clearEffectEl.classList.add('show');
+  clearTimeout(clearEffectTimeout);
+  clearEffectTimeout = setTimeout(() => clearEffectEl.classList.remove('show'), 900);
+}
+
+let audioCtx;
+function getAudioCtx() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      return null;
+    }
+  }
+  return audioCtx;
+}
+
+function playTone(freq, duration, delay) {
+  const ctxA = getAudioCtx();
+  if (!ctxA) return;
+  if (ctxA.state === 'suspended') ctxA.resume();
+  const osc = ctxA.createOscillator();
+  const gain = ctxA.createGain();
+  osc.type = 'square';
+  osc.frequency.value = freq;
+  osc.connect(gain);
+  gain.connect(ctxA.destination);
+  const startTime = ctxA.currentTime + delay;
+  gain.gain.setValueAtTime(0.08, startTime);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+  osc.start(startTime);
+  osc.stop(startTime + duration + 0.02);
+}
+
+// Cada entrada es una secuencia de [frecuencia, duración] tocada en cadena.
+const SOUND_SEQUENCES = {
+  clear: [[440, 0.1]],
+  combo: [[523, 0.08], [659, 0.08]],
+  big: [[392, 0.1], [523, 0.1], [659, 0.15]],
+  tspin: [[330, 0.1], [415, 0.15]],
+  perfect: [[523, 0.1], [659, 0.1], [784, 0.1], [1046, 0.2]],
+};
+
+function playSound(kind) {
+  const notes = SOUND_SEQUENCES[kind];
+  if (!notes) return;
+  let t = 0;
+  for (const [freq, dur] of notes) {
+    playTone(freq, dur, t);
+    t += dur * 0.8;
+  }
 }
 
 function updateFreezeIndicator() {
@@ -437,6 +591,12 @@ function init() {
   linesSincePowerUp = 0;
   pendingPowerUp = false;
   freezeRemaining = 0;
+  combo = 0;
+  b2bActive = false;
+  lastActionWasRotation = false;
+  pendingTSpin = false;
+  clearTimeout(clearEffectTimeout);
+  clearEffectEl.classList.remove('show');
   lastTime = performance.now();
   next = randomPiece();
   spawn();
@@ -453,12 +613,15 @@ document.addEventListener('keydown', e => {
   switch (e.code) {
     case 'ArrowLeft':
       if (!collide(current.shape, current.x - 1, current.y)) current.x--;
+      lastActionWasRotation = false;
       break;
     case 'ArrowRight':
       if (!collide(current.shape, current.x + 1, current.y)) current.x++;
+      lastActionWasRotation = false;
       break;
     case 'ArrowDown':
       softDrop();
+      lastActionWasRotation = false;
       break;
     case 'ArrowUp':
     case 'KeyX':

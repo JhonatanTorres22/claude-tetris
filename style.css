@@ -72,6 +72,10 @@ body {
   align-items: flex-start;
 }
 
+.board-wrap {
+  position: relative;
+}
+
 #board {
   display: block;
   border: 1px solid var(--border-color);
@@ -79,6 +83,41 @@ body {
   border-radius: 4px;
   box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
 }
+
+/* ---- Popup de combo / T-spin / B2B / Perfect Clear ---- */
+.clear-effect {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 12px;
+  pointer-events: none;
+  opacity: 0;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  text-shadow: 0 0 14px currentColor;
+  white-space: pre-line;
+}
+
+.clear-effect.show {
+  animation: clear-pop 0.9s ease-out;
+}
+
+@keyframes clear-pop {
+  0%   { opacity: 0; transform: scale(0.6); }
+  15%  { opacity: 1; transform: scale(1.12); }
+  30%  { opacity: 1; transform: scale(1); }
+  80%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.05); }
+}
+
+.clear-effect.effect-normal { color: var(--accent-color); font-size: 18px; }
+.clear-effect.effect-combo  { color: #ffd54f; font-size: 24px; }
+.clear-effect.effect-big    { color: #e57373; font-size: 28px; }
+.clear-effect.effect-tspin  { color: #ba68c8; font-size: 24px; }
+.clear-effect.effect-perfect { color: #81c784; font-size: 30px; }
 
 /* ---- Panel lateral ---- */
 .panel {
@@ -149,6 +188,10 @@ body {
   font-weight: 700;
   color: var(--overlay-title-color);
   letter-spacing: 0.5px;
+}
+
+.combo-value {
+  color: #ffd54f !important;
 }
 
 /* ---- Theme switch ---- */
