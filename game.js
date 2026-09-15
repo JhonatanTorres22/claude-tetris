@@ -68,6 +68,31 @@ POWERUPS.forEach(p => { POWERUP_GLYPHS[p.colorIndex] = p.glyph; });
 
 const GARBAGE_COLOR_INDEX = 14;
 
+// --- Habilidades cargables ---
+// `skillEnergy` (0–100) se llena al limpiar líneas (SKILL_ENERGY_GAIN, índice
+// = líneas limpiadas en esa jugada); al llegar a SKILL_MAX_ENERGY el jugador
+// puede activar una de las 5 habilidades de SKILLS pulsando Digit1–Digit5 (o
+// haciendo clic en su icono). Activar cualquiera consume toda la energía.
+// `upcomingQueue` mantiene UPCOMING_QUEUE_SIZE piezas normales pregeneradas
+// más allá de `next` — necesarias para la habilidad "preview" y para que
+// spawn() pueda tomar de ahí en vez de generar al vuelo (salvo power-ups,
+// que se siguen generando en el momento como antes, para no romper su
+// disparo por `linesSincePowerUp`).
+const SKILL_MAX_ENERGY = 100;
+const SKILL_ENERGY_GAIN = [0, 12, 28, 48, 80]; // índice = líneas limpiadas
+const UPCOMING_QUEUE_SIZE = 4; // + `next` = 5 piezas visibles con "preview"
+const SKILL_PREVIEW_DURATION = 8000; // ms que dura la revelación de "preview"
+const SKILL_SLOW_DURATION = 10000; // ms que dura "Ralentizar"
+const SKILL_SLOW_FACTOR = 2.2; // multiplicador de dropInterval mientras dura
+
+const SKILLS = [
+  { id: 'preview', name: 'Visión', glyph: '👁', desc: 'Ver las próximas 5 piezas' },
+  { id: 'swap', name: 'Intercambio', glyph: '🔄', desc: 'Cambia la pieza actual por otra del pool' },
+  { id: 'slow', name: 'Ralentizar', glyph: '🐌', desc: 'Ralentiza la caída 10s' },
+  { id: 'undo', name: 'Deshacer', glyph: '↩️', desc: 'Deshace la última colocación' },
+  { id: 'hold', name: 'Reservar', glyph: '📦', desc: 'Guarda la pieza actual (hold)' },
+];
+
 // --- Modo desafío ---
 // Cada entrada describe un nivel con objetivo. `targetLines` (si existe) gana
 // al alcanzar ese número de líneas; `timeLimit` (ms) pierde si se agota antes
@@ -147,12 +172,27 @@ const objectiveSection = document.getElementById('objective-section');
 const objectiveDescEl = document.getElementById('objective-desc');
 const objectiveBarFillEl = document.getElementById('objective-bar-fill');
 const objectiveValueEl = document.getElementById('objective-value');
+const skillsSection = document.getElementById('skills-section');
+const skillBarFillEl = document.getElementById('skill-bar-fill');
+const skillIconsEl = document.getElementById('skill-icons');
+const holdCanvas = document.getElementById('hold-canvas');
+const holdCtx = holdCanvas.getContext('2d');
+const previewSection = document.getElementById('preview-section');
+const previewCanvas = document.getElementById('preview-canvas');
+const previewCtx = previewCanvas.getContext('2d');
+const previewCountdownEl = document.getElementById('preview-countdown');
 
 const THEME_STORAGE_KEY = 'tetris-theme';
 
 let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
 let linesSincePowerUp, pendingPowerUp, freezeRemaining;
 let combo, b2bActive, lastActionWasRotation, pendingTSpin, clearEffectTimeout;
+// Habilidades cargables: `upcomingQueue` es la cola de piezas normales
+// pregeneradas más allá de `next`; `holdPiece` es la pieza reservada (o
+// null); `lastPlacementSnapshot` guarda el estado justo antes del último
+// lockPiece() para poder deshacerlo (un solo nivel).
+let skillEnergy, skillReady, upcomingQueue, holdPiece, lastPlacementSnapshot;
+let previewActive, previewRemaining, slowRemaining;
 // Modo desafío: `challengeMode` es null en modo libre o una entrada de
 // CHALLENGES mientras un desafío está activo. `groundedAccum` cuenta cuánto
 // lleva la pieza actual apoyada sin poder bajar (usado por el lock delay de
@@ -300,6 +340,7 @@ function clearLines() {
 
   lines += cleared;
   combo++;
+  gainSkillEnergy(cleared);
 
   const isTetris = cleared === 4;
   const isDifficult = isTSpin || isTetris; // lo que cuenta para Back-to-Back
@@ -407,6 +448,178 @@ function freezeEffect() {
   freezeRemaining = 5000;
 }
 
+// --- Habilidades cargables: cola de preview, energía y snapshot para deshacer ---
+
+function refillUpcomingQueue() {
+  while (upcomingQueue.length < UPCOMING_QUEUE_SIZE) upcomingQueue.push(randomPiece());
+}
+
+function cloneBoard(b) {
+  return b.map(row => [...row]);
+}
+
+function clonePiece(p) {
+  if (!p) return null;
+  return { ...p, shape: p.shape.map(row => [...row]) };
+}
+
+function gainSkillEnergy(cleared) {
+  if (!cleared) return;
+  skillEnergy = Math.min(SKILL_MAX_ENERGY, skillEnergy + (SKILL_ENERGY_GAIN[cleared] || 0));
+  skillReady = skillEnergy >= SKILL_MAX_ENERGY;
+}
+
+function isSkillUsable(id) {
+  if (id === 'undo') return !!lastPlacementSnapshot;
+  if (id === 'hold') return !current.power;
+  return true;
+}
+
+function takeSnapshot() {
+  lastPlacementSnapshot = {
+    board: cloneBoard(board),
+    current: clonePiece(current),
+    next: clonePiece(next),
+    upcomingQueue: upcomingQueue.map(clonePiece),
+    holdPiece: clonePiece(holdPiece),
+    score, lines, level, dropInterval,
+    linesSincePowerUp, pendingPowerUp,
+    combo, b2bActive,
+    skillEnergy,
+  };
+}
+
+function activatePreviewSkill() {
+  previewActive = true;
+  previewRemaining = SKILL_PREVIEW_DURATION;
+}
+
+function activateSwapSkill() {
+  const options = [];
+  for (let t = 1; t < PIECES.length; t++) if (t !== current.type) options.push(t);
+  const type = options[Math.floor(Math.random() * options.length)];
+  const shape = PIECES[type].map(row => [...row]);
+  const x = Math.floor(COLS / 2) - Math.floor(shape[0].length / 2);
+  let y = current.y;
+  while (y > 0 && collide(shape, x, y)) y--;
+  if (collide(shape, x, y)) return; // sin espacio, se descarta el intercambio
+  current = { type, shape, x, y };
+  lastActionWasRotation = false;
+}
+
+function activateSlowSkill() {
+  slowRemaining = SKILL_SLOW_DURATION;
+}
+
+function activateUndoSkill() {
+  const s = lastPlacementSnapshot;
+  if (!s) return;
+  board = cloneBoard(s.board);
+  current = clonePiece(s.current);
+  next = clonePiece(s.next);
+  upcomingQueue = s.upcomingQueue.map(clonePiece);
+  holdPiece = clonePiece(s.holdPiece);
+  score = s.score;
+  lines = s.lines;
+  level = s.level;
+  dropInterval = s.dropInterval;
+  linesSincePowerUp = s.linesSincePowerUp;
+  pendingPowerUp = s.pendingPowerUp;
+  combo = s.combo;
+  b2bActive = s.b2bActive;
+  dropAccum = 0;
+  lastActionWasRotation = false;
+  pendingTSpin = false;
+  lastPlacementSnapshot = null; // un solo nivel de deshacer
+  drawNext();
+  drawHold();
+}
+
+function activateHoldSkill() {
+  if (current.power) return; // no aplica a piezas de power-up
+  if (holdPiece) {
+    const swapped = clonePiece(holdPiece);
+    swapped.x = Math.floor(COLS / 2) - Math.floor(swapped.shape[0].length / 2);
+    swapped.y = 0;
+    holdPiece = clonePiece(current);
+    current = swapped;
+  } else {
+    holdPiece = clonePiece(current);
+    current = next;
+    next = upcomingQueue.length ? upcomingQueue.shift() : randomPiece();
+    refillUpcomingQueue();
+  }
+  lastActionWasRotation = false;
+  if (collide(current.shape, current.x, current.y)) endGame();
+  drawNext();
+  drawHold();
+}
+
+function activateSkill(index) {
+  if (!skillReady || paused || gameOver) return;
+  const skill = SKILLS[index];
+  if (!skill || !isSkillUsable(skill.id)) return;
+  switch (skill.id) {
+    case 'preview': activatePreviewSkill(); break;
+    case 'swap': activateSwapSkill(); break;
+    case 'slow': activateSlowSkill(); break;
+    case 'undo': activateUndoSkill(); break;
+    case 'hold': activateHoldSkill(); break;
+  }
+  skillEnergy = 0;
+  skillReady = false;
+  updateHUD();
+}
+
+function renderSkillBar() {
+  skillIconsEl.innerHTML = '';
+  SKILLS.forEach((skill, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'skill-icon';
+    btn.type = 'button';
+    btn.title = `${i + 1}. ${skill.name} — ${skill.desc}`;
+    btn.innerHTML = `<span class="skill-glyph">${skill.glyph}</span><span class="skill-key">${i + 1}</span>`;
+    btn.addEventListener('click', () => activateSkill(i));
+    skillIconsEl.appendChild(btn);
+  });
+}
+
+function updateSkillHUD() {
+  const pct = Math.min(100, (skillEnergy / SKILL_MAX_ENERGY) * 100);
+  skillBarFillEl.style.width = `${pct}%`;
+  skillsSection.classList.toggle('skill-ready', skillReady);
+  [...skillIconsEl.children].forEach((el, i) => {
+    const usable = skillReady && isSkillUsable(SKILLS[i].id);
+    el.classList.toggle('usable', usable);
+  });
+}
+
+function drawHold() {
+  holdCtx.clearRect(0, 0, holdCanvas.width, holdCanvas.height);
+  if (!holdPiece) return;
+  const HB = 20;
+  const shape = holdPiece.shape;
+  const offX = Math.floor((4 - shape[0].length) / 2);
+  const offY = Math.floor((4 - shape.length) / 2);
+  for (let r = 0; r < shape.length; r++)
+    for (let c = 0; c < shape[r].length; c++)
+      if (shape[r][c]) drawBlock(holdCtx, offX + c, offY + r, shape[r][c], HB);
+}
+
+function drawPreviewPanel() {
+  previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+  const PB = 10; // 4 bloques por pieza × 10px = 40px + margen = slot de 50px
+  const pieces = [next, ...upcomingQueue].slice(0, 5);
+  pieces.forEach((p, i) => {
+    const shape = p.shape;
+    const offX = Math.floor((4 - shape[0].length) / 2);
+    const offY = Math.floor((4 - shape.length) / 2);
+    for (let r = 0; r < shape.length; r++)
+      for (let c = 0; c < shape[r].length; c++)
+        if (shape[r][c]) drawBlock(previewCtx, i * 5 + offX + c, offY + r, shape[r][c], PB);
+  });
+}
+
 function ghostY() {
   let gy = current.y;
   while (!collide(current.shape, current.x, gy + 1)) gy++;
@@ -433,6 +646,7 @@ function softDrop() {
 }
 
 function lockPiece() {
+  takeSnapshot(); // guarda el estado previo para la habilidad "Deshacer"
   if (current.power) {
     pendingTSpin = false;
     applyPowerUp(current.power);
@@ -448,8 +662,13 @@ function lockPiece() {
 
 function spawn() {
   current = next;
-  next = pendingPowerUp ? randomPowerUpPiece() : randomPiece();
+  if (pendingPowerUp) {
+    next = randomPowerUpPiece();
+  } else {
+    next = upcomingQueue.length ? upcomingQueue.shift() : randomPiece();
+  }
   pendingPowerUp = false;
+  refillUpcomingQueue();
   lastActionWasRotation = false;
   if (collide(current.shape, current.x, current.y)) {
     endGame();
@@ -465,6 +684,7 @@ function updateHUD() {
   comboSection.hidden = combo <= 1;
   if (combo > 1) comboValueEl.textContent = `x${combo}`;
   updateObjectiveHUD();
+  updateSkillHUD();
 }
 
 // --- Modo desafío: menú, arranque y mecánicas especiales ---
@@ -689,13 +909,12 @@ function playSound(kind) {
   }
 }
 
-function updateFreezeIndicator() {
-  if (freezeRemaining > 0) {
-    statusSection.hidden = false;
-    statusEl.textContent = `❄ Congelado (${Math.ceil(freezeRemaining / 1000)}s)`;
-  } else {
-    statusSection.hidden = true;
-  }
+function updateStatusIndicator() {
+  const parts = [];
+  if (freezeRemaining > 0) parts.push(`❄ Congelado (${Math.ceil(freezeRemaining / 1000)}s)`);
+  if (slowRemaining > 0) parts.push(`🐌 Lento (${Math.ceil(slowRemaining / 1000)}s)`);
+  statusSection.hidden = parts.length === 0;
+  statusEl.textContent = parts.join(' · ');
 }
 
 function drawBlock(context, x, y, colorIndex, size, alpha) {
@@ -774,6 +993,7 @@ function drawNext() {
   const def = next.power && POWERUPS.find(p => p.id === next.power);
   nextLabelEl.textContent = def ? def.name : '';
   nextSection.classList.toggle('power-incoming', !!def);
+  drawPreviewPanel();
 }
 
 function endGame() {
@@ -821,6 +1041,19 @@ function loop(ts) {
     }
   }
 
+  if (previewActive) {
+    previewRemaining -= dt;
+    if (previewRemaining <= 0) {
+      previewActive = false;
+      previewRemaining = 0;
+    }
+  }
+  previewSection.hidden = !previewActive;
+  if (previewActive) previewCountdownEl.textContent = `${Math.ceil(previewRemaining / 1000)}s`;
+
+  if (slowRemaining > 0) slowRemaining = Math.max(0, slowRemaining - dt);
+  const effectiveDropInterval = slowRemaining > 0 ? dropInterval * SKILL_SLOW_FACTOR : dropInterval;
+
   if (freezeRemaining > 0) {
     freezeRemaining = Math.max(0, freezeRemaining - dt);
   } else if (challengeMode && challengeMode.lockDelay) {
@@ -839,14 +1072,14 @@ function loop(ts) {
     } else {
       groundedAccum = 0;
       dropAccum += dt;
-      if (dropAccum >= dropInterval) {
+      if (dropAccum >= effectiveDropInterval) {
         dropAccum = 0;
         current.y++;
       }
     }
   } else {
     dropAccum += dt;
-    if (dropAccum >= dropInterval) {
+    if (dropAccum >= effectiveDropInterval) {
       dropAccum = 0;
       if (!collide(current.shape, current.x, current.y + 1)) {
         current.y++;
@@ -859,7 +1092,7 @@ function loop(ts) {
       }
     }
   }
-  updateFreezeIndicator();
+  updateStatusIndicator();
   draw();
   animId = requestAnimationFrame(loop);
 }
@@ -884,13 +1117,23 @@ function init() {
   challengeGarbageAccum = 0;
   groundedAccum = 0;
   challengeOutcome = null;
+  skillEnergy = 0;
+  skillReady = false;
+  upcomingQueue = [];
+  refillUpcomingQueue();
+  holdPiece = null;
+  lastPlacementSnapshot = null;
+  previewActive = false;
+  previewRemaining = 0;
+  slowRemaining = 0;
   clearTimeout(clearEffectTimeout);
   clearEffectEl.classList.remove('show');
   lastTime = performance.now();
   next = randomPiece();
   spawn();
+  drawHold();
   updateHUD();
-  updateFreezeIndicator();
+  updateStatusIndicator();
   overlay.classList.add('hidden');
   challengeBackBtn.hidden = !challengeMode;
   cancelAnimationFrame(animId);
@@ -922,6 +1165,13 @@ document.addEventListener('keydown', e => {
       e.preventDefault();
       hardDrop();
       break;
+    case 'Digit1':
+    case 'Digit2':
+    case 'Digit3':
+    case 'Digit4':
+    case 'Digit5':
+      activateSkill(Number(e.code.slice(5)) - 1);
+      break;
   }
   updateHUD();
 });
@@ -930,4 +1180,5 @@ restartBtn.addEventListener('click', init);
 
 initTheme();
 renderChallengeList();
+renderSkillBar();
 init();

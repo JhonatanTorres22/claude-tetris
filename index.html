@@ -58,10 +58,26 @@
           <span class="value" id="powerup-countdown">10</span>
         </div>
 
+        <div class="panel-section" id="skills-section">
+          <span class="label">HABILIDADES</span>
+          <div class="skill-bar"><div class="skill-bar-fill" id="skill-bar-fill"></div></div>
+          <div class="skills-row" id="skill-icons"></div>
+        </div>
+
         <div class="panel-section" id="next-section">
           <span class="label">NEXT</span>
           <canvas id="next-canvas" width="120" height="120"></canvas>
           <span class="next-power-label" id="next-label"></span>
+        </div>
+
+        <div class="panel-section" id="hold-section">
+          <span class="label">HOLD</span>
+          <canvas id="hold-canvas" width="80" height="80"></canvas>
+        </div>
+
+        <div class="panel-section" id="preview-section" hidden>
+          <span class="label">VISIÓN <span id="preview-countdown"></span></span>
+          <canvas id="preview-canvas" width="250" height="50"></canvas>
         </div>
 
         <div class="panel-section" id="status-section" hidden>
@@ -77,6 +93,7 @@
             <li><kbd>↓</kbd> bajar</li>
             <li><kbd>Space</kbd> caída</li>
             <li><kbd>P</kbd> pausa</li>
+            <li><kbd>1</kbd>–<kbd>5</kbd> habilidad</li>
           </ul>
         </div>
       </aside>

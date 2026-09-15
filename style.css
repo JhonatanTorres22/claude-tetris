@@ -182,6 +182,82 @@ body {
   50% { box-shadow: 0 0 16px var(--overlay-title-color); }
 }
 
+/* ---- Habilidades cargables ---- */
+.skill-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  overflow: hidden;
+}
+
+.skill-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent-color);
+  transition: width 0.2s ease-out;
+}
+
+#skills-section.skill-ready .skill-bar-fill {
+  background: #ffd54f;
+  animation: skill-pulse 1s ease-in-out infinite;
+}
+
+@keyframes skill-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px #ffd54f; }
+  50% { opacity: 0.7; box-shadow: 0 0 14px #ffd54f; }
+}
+
+.skills-row {
+  display: flex;
+  gap: 6px;
+}
+
+.skill-icon {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 0;
+  font-size: 15px;
+  cursor: pointer;
+  opacity: 0.4;
+  filter: grayscale(1);
+  transition: opacity 0.15s, filter 0.15s, border-color 0.15s;
+}
+
+.skill-icon.usable {
+  opacity: 1;
+  filter: none;
+  border-color: #ffd54f;
+  box-shadow: 0 0 8px rgba(255, 213, 79, 0.5);
+}
+
+.skill-key {
+  font-size: 9px;
+  color: var(--label-color);
+  font-weight: 700;
+}
+
+#hold-canvas,
+#preview-canvas {
+  display: block;
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  border-radius: 4px;
+}
+
+#preview-countdown {
+  color: var(--overlay-title-color);
+  font-weight: 700;
+}
+
 .status-value {
   font-family: 'Courier New', Courier, monospace;
   font-size: 15px;
