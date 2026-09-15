@@ -253,6 +253,22 @@ body {
   border-radius: 4px;
 }
 
+#hold-canvas {
+  transition: opacity 0.15s, filter 0.15s;
+}
+
+.hold-lock-label {
+  color: var(--overlay-title-color);
+  font-size: 11px;
+}
+
+/* Hold bloqueado: ya se usó en la pieza actual, hasta que se fije o se
+   intercambie el hold en la siguiente. */
+#hold-section.hold-locked #hold-canvas {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
 #preview-countdown {
   color: var(--overlay-title-color);
   font-weight: 700;

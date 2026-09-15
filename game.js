@@ -71,7 +71,7 @@ const GARBAGE_COLOR_INDEX = 14;
 // --- Habilidades cargables ---
 // `skillEnergy` (0–100) se llena al limpiar líneas (SKILL_ENERGY_GAIN, índice
 // = líneas limpiadas en esa jugada); al llegar a SKILL_MAX_ENERGY el jugador
-// puede activar una de las 5 habilidades de SKILLS pulsando Digit1–Digit5 (o
+// puede activar una de las 4 habilidades de SKILLS pulsando Digit1–Digit4 (o
 // haciendo clic en su icono). Activar cualquiera consume toda la energía.
 // `upcomingQueue` mantiene UPCOMING_QUEUE_SIZE piezas normales pregeneradas
 // más allá de `next` — necesarias para la habilidad "preview" y para que
@@ -90,8 +90,14 @@ const SKILLS = [
   { id: 'swap', name: 'Intercambio', glyph: '🔄', desc: 'Cambia la pieza actual por otra del pool' },
   { id: 'slow', name: 'Ralentizar', glyph: '🐌', desc: 'Ralentiza la caída 10s' },
   { id: 'undo', name: 'Deshacer', glyph: '↩️', desc: 'Deshace la última colocación' },
-  { id: 'hold', name: 'Reservar', glyph: '📦', desc: 'Guarda la pieza actual (hold)' },
 ];
+
+// --- Hold (reservar pieza) ---
+// Mecánica base del juego (no una habilidad cargable): tecla C o Shift envía
+// `current` al "bucket" de hold (`holdPiece`) e intercambia con la pieza ya
+// reservada, si la había. `holdLocked` impide usarlo más de una vez por
+// pieza — se activa en holdSwap() y se libera en cada spawn() (al fijar la
+// pieza actual o tras un intercambio de hold, lo que llegue primero).
 
 // --- Modo desafío ---
 // Cada entrada describe un nivel con objetivo. `targetLines` (si existe) gana
@@ -175,8 +181,10 @@ const objectiveValueEl = document.getElementById('objective-value');
 const skillsSection = document.getElementById('skills-section');
 const skillBarFillEl = document.getElementById('skill-bar-fill');
 const skillIconsEl = document.getElementById('skill-icons');
+const holdSection = document.getElementById('hold-section');
 const holdCanvas = document.getElementById('hold-canvas');
 const holdCtx = holdCanvas.getContext('2d');
+const holdLockLabelEl = document.getElementById('hold-lock-label');
 const previewSection = document.getElementById('preview-section');
 const previewCanvas = document.getElementById('preview-canvas');
 const previewCtx = previewCanvas.getContext('2d');
@@ -188,10 +196,11 @@ let board, current, next, score, lines, level, paused, gameOver, lastTime, dropA
 let linesSincePowerUp, pendingPowerUp, freezeRemaining;
 let combo, b2bActive, lastActionWasRotation, pendingTSpin, clearEffectTimeout;
 // Habilidades cargables: `upcomingQueue` es la cola de piezas normales
-// pregeneradas más allá de `next`; `holdPiece` es la pieza reservada (o
-// null); `lastPlacementSnapshot` guarda el estado justo antes del último
-// lockPiece() para poder deshacerlo (un solo nivel).
-let skillEnergy, skillReady, upcomingQueue, holdPiece, lastPlacementSnapshot;
+// pregeneradas más allá de `next`; `lastPlacementSnapshot` guarda el estado
+// justo antes del último lockPiece() para poder deshacerlo (un solo nivel).
+// Hold (mecánica base, no habilidad): `holdPiece` es la pieza reservada (o
+// null); `holdLocked` marca que ya se usó el hold en la pieza actual.
+let skillEnergy, skillReady, upcomingQueue, holdPiece, holdLocked, lastPlacementSnapshot;
 let previewActive, previewRemaining, slowRemaining;
 // Modo desafío: `challengeMode` es null en modo libre o una entrada de
 // CHALLENGES mientras un desafío está activo. `groundedAccum` cuenta cuánto
@@ -471,7 +480,6 @@ function gainSkillEnergy(cleared) {
 
 function isSkillUsable(id) {
   if (id === 'undo') return !!lastPlacementSnapshot;
-  if (id === 'hold') return !current.power;
   return true;
 }
 
@@ -482,6 +490,7 @@ function takeSnapshot() {
     next: clonePiece(next),
     upcomingQueue: upcomingQueue.map(clonePiece),
     holdPiece: clonePiece(holdPiece),
+    holdLocked,
     score, lines, level, dropInterval,
     linesSincePowerUp, pendingPowerUp,
     combo, b2bActive,
@@ -519,6 +528,7 @@ function activateUndoSkill() {
   next = clonePiece(s.next);
   upcomingQueue = s.upcomingQueue.map(clonePiece);
   holdPiece = clonePiece(s.holdPiece);
+  holdLocked = s.holdLocked;
   score = s.score;
   lines = s.lines;
   level = s.level;
@@ -533,10 +543,15 @@ function activateUndoSkill() {
   lastPlacementSnapshot = null; // un solo nivel de deshacer
   drawNext();
   drawHold();
+  updateHoldHUD();
 }
 
-function activateHoldSkill() {
-  if (current.power) return; // no aplica a piezas de power-up
+// Hold clásico: tecla C/Shift. Intercambia `current` con `holdPiece` (o lo
+// guarda si el bucket está vacío y trae la siguiente pieza de la cola).
+// Bloqueado hasta que la pieza actual se asiente (holdLocked), para evitar
+// abusar del intercambio infinito; no aplica a piezas de power-up.
+function holdSwap() {
+  if (holdLocked || current.power) return;
   if (holdPiece) {
     const swapped = clonePiece(holdPiece);
     swapped.x = Math.floor(COLS / 2) - Math.floor(swapped.shape[0].length / 2);
@@ -549,10 +564,13 @@ function activateHoldSkill() {
     next = upcomingQueue.length ? upcomingQueue.shift() : randomPiece();
     refillUpcomingQueue();
   }
+  holdLocked = true;
   lastActionWasRotation = false;
+  pendingTSpin = false;
   if (collide(current.shape, current.x, current.y)) endGame();
   drawNext();
   drawHold();
+  updateHoldHUD();
 }
 
 function activateSkill(index) {
@@ -564,7 +582,6 @@ function activateSkill(index) {
     case 'swap': activateSwapSkill(); break;
     case 'slow': activateSlowSkill(); break;
     case 'undo': activateUndoSkill(); break;
-    case 'hold': activateHoldSkill(); break;
   }
   skillEnergy = 0;
   skillReady = false;
@@ -592,6 +609,11 @@ function updateSkillHUD() {
     const usable = skillReady && isSkillUsable(SKILLS[i].id);
     el.classList.toggle('usable', usable);
   });
+}
+
+function updateHoldHUD() {
+  holdSection.classList.toggle('hold-locked', holdLocked);
+  if (holdLockLabelEl) holdLockLabelEl.hidden = !holdLocked;
 }
 
 function drawHold() {
@@ -670,10 +692,12 @@ function spawn() {
   pendingPowerUp = false;
   refillUpcomingQueue();
   lastActionWasRotation = false;
+  holdLocked = false; // nueva pieza en juego: el hold vuelve a estar disponible
   if (collide(current.shape, current.x, current.y)) {
     endGame();
   }
   drawNext();
+  updateHoldHUD();
 }
 
 function updateHUD() {
@@ -1122,6 +1146,7 @@ function init() {
   upcomingQueue = [];
   refillUpcomingQueue();
   holdPiece = null;
+  holdLocked = false;
   lastPlacementSnapshot = null;
   previewActive = false;
   previewRemaining = 0;
@@ -1132,6 +1157,7 @@ function init() {
   next = randomPiece();
   spawn();
   drawHold();
+  updateHoldHUD();
   updateHUD();
   updateStatusIndicator();
   overlay.classList.add('hidden');
@@ -1165,11 +1191,15 @@ document.addEventListener('keydown', e => {
       e.preventDefault();
       hardDrop();
       break;
+    case 'KeyC':
+    case 'ShiftLeft':
+    case 'ShiftRight':
+      holdSwap();
+      break;
     case 'Digit1':
     case 'Digit2':
     case 'Digit3':
     case 'Digit4':
-    case 'Digit5':
       activateSkill(Number(e.code.slice(5)) - 1);
       break;
   }
