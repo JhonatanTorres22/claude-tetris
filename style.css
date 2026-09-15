@@ -170,7 +170,8 @@ body {
   min-height: 14px;
 }
 
-/* Resalta el panel NEXT cuando el power-up ya está en camino (colorIndex 9-13) */
+/* Resalta el panel NEXT cuando viene un power-up (colorIndex 9-13) o el
+   bloque de recompensa tras un Tetris (colorIndex 18) */
 #next-section.power-incoming #next-canvas {
   border-color: var(--overlay-title-color);
   box-shadow: 0 0 12px var(--overlay-title-color);

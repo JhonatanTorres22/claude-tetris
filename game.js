@@ -20,6 +20,10 @@ const COLORS = [
   '#4db6ac', // 12 - Gravedad
   '#4fc3f7', // 13 - Congelar
   '#546e7a', // 14 - Basura (bloque indestructible del modo desafío "Marea de basura")
+  '#ce93d8', // 15 - Pentominó Cruz
+  '#80cbc4', // 16 - Pentominó U
+  '#fff59d', // 17 - Pentominó Y
+  '#ffffff', // 18 - Bloque único (recompensa tras un Tetris)
 ];
 
 const PIECES = [
@@ -67,6 +71,38 @@ const POWERUP_GLYPHS = {};
 POWERUPS.forEach(p => { POWERUP_GLYPHS[p.colorIndex] = p.glyph; });
 
 const GARBAGE_COLOR_INDEX = 14;
+
+// --- Piezas pentominó y pieza de recompensa ---
+// Además de las 7 piezas estándar y la "tuerca" (N), cada pieza normal que se
+// genera para upcomingQueue/next tiene PENTOMINO_CHANCE de probabilidad de
+// ser en su lugar una de las 3 piezas pentominó (5 bloques): Cruz, U e Y
+// (randomQueuePiece). Se comportan como cualquier pieza normal (caen, rotan,
+// se fusionan al tablero) salvo que no participan en T-spin ni en la
+// habilidad "Intercambio" (que solo elige entre PIECES). Aparte, tras
+// limpiar un Tetris (4 líneas de golpe) la siguiente pieza generada es un
+// bloque 1×1 de recompensa (randomSinglePiece), fácil de encajar tras la
+// dificultad de lograr el Tetris.
+const PENTOMINO_CHANCE = 0.08;
+
+const PENTOMINOES = [
+  { id: 'plus', name: 'Cruz', colorIndex: 15, shape: [
+    [0, 15, 0],
+    [15, 15, 15],
+    [0, 15, 0],
+  ] },
+  { id: 'u', name: 'U', colorIndex: 16, shape: [
+    [16, 0, 16],
+    [16, 16, 16],
+  ] },
+  { id: 'y', name: 'Y', colorIndex: 17, shape: [
+    [0, 17],
+    [17, 17],
+    [0, 17],
+    [0, 17],
+  ] },
+];
+
+const SINGLE_REWARD_COLOR_INDEX = 18;
 
 // --- Habilidades cargables ---
 // `skillEnergy` (0–100) se llena al limpiar líneas (SKILL_ENERGY_GAIN, índice
@@ -193,7 +229,7 @@ const previewCountdownEl = document.getElementById('preview-countdown');
 const THEME_STORAGE_KEY = 'tetris-theme';
 
 let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
-let linesSincePowerUp, pendingPowerUp, freezeRemaining;
+let linesSincePowerUp, pendingPowerUp, pendingSinglePiece, freezeRemaining;
 let combo, b2bActive, lastActionWasRotation, pendingTSpin, clearEffectTimeout;
 // Habilidades cargables: `upcomingQueue` es la cola de piezas normales
 // pregeneradas más allá de `next`; `lastPlacementSnapshot` guarda el estado
@@ -248,6 +284,22 @@ function randomPiece() {
 function randomPowerUpPiece() {
   const def = POWERUPS[Math.floor(Math.random() * POWERUPS.length)];
   return { power: def.id, ...makePieceFromShape([[def.colorIndex]]) };
+}
+
+function randomPentominoPiece() {
+  const def = PENTOMINOES[Math.floor(Math.random() * PENTOMINOES.length)];
+  const shape = def.shape.map(row => [...row]);
+  return { type: def.colorIndex, ...makePieceFromShape(shape) };
+}
+
+function randomSinglePiece() {
+  return { type: SINGLE_REWARD_COLOR_INDEX, ...makePieceFromShape([[SINGLE_REWARD_COLOR_INDEX]]) };
+}
+
+// Pieza normal para upcomingQueue/next: casi siempre una pieza estándar de
+// PIECES, pero con PENTOMINO_CHANCE de probabilidad es un pentominó.
+function randomQueuePiece() {
+  return Math.random() < PENTOMINO_CHANCE ? randomPentominoPiece() : randomPiece();
 }
 
 function collide(shape, ox, oy) {
@@ -353,6 +405,9 @@ function clearLines() {
 
   const isTetris = cleared === 4;
   const isDifficult = isTSpin || isTetris; // lo que cuenta para Back-to-Back
+  // Recompensa: tras un Tetris, la siguiente pieza generada es un bloque 1×1
+  // fácil de encajar (no se pisa con un power-up ya pendiente, ver spawn()).
+  if (isTetris) pendingSinglePiece = true;
   let clearScore = isTSpin ? TSPIN_SCORES[cleared] * level : (LINE_SCORES[cleared] || 0) * level;
 
   let label = isTSpin
@@ -460,7 +515,7 @@ function freezeEffect() {
 // --- Habilidades cargables: cola de preview, energía y snapshot para deshacer ---
 
 function refillUpcomingQueue() {
-  while (upcomingQueue.length < UPCOMING_QUEUE_SIZE) upcomingQueue.push(randomPiece());
+  while (upcomingQueue.length < UPCOMING_QUEUE_SIZE) upcomingQueue.push(randomQueuePiece());
 }
 
 function cloneBoard(b) {
@@ -492,7 +547,7 @@ function takeSnapshot() {
     holdPiece: clonePiece(holdPiece),
     holdLocked,
     score, lines, level, dropInterval,
-    linesSincePowerUp, pendingPowerUp,
+    linesSincePowerUp, pendingPowerUp, pendingSinglePiece,
     combo, b2bActive,
     skillEnergy,
   };
@@ -535,6 +590,7 @@ function activateUndoSkill() {
   dropInterval = s.dropInterval;
   linesSincePowerUp = s.linesSincePowerUp;
   pendingPowerUp = s.pendingPowerUp;
+  pendingSinglePiece = s.pendingSinglePiece;
   combo = s.combo;
   b2bActive = s.b2bActive;
   dropAccum = 0;
@@ -561,7 +617,7 @@ function holdSwap() {
   } else {
     holdPiece = clonePiece(current);
     current = next;
-    next = upcomingQueue.length ? upcomingQueue.shift() : randomPiece();
+    next = upcomingQueue.length ? upcomingQueue.shift() : randomQueuePiece();
     refillUpcomingQueue();
   }
   holdLocked = true;
@@ -686,10 +742,13 @@ function spawn() {
   current = next;
   if (pendingPowerUp) {
     next = randomPowerUpPiece();
+  } else if (pendingSinglePiece) {
+    next = randomSinglePiece();
   } else {
-    next = upcomingQueue.length ? upcomingQueue.shift() : randomPiece();
+    next = upcomingQueue.length ? upcomingQueue.shift() : randomQueuePiece();
   }
   pendingPowerUp = false;
+  pendingSinglePiece = false;
   refillUpcomingQueue();
   lastActionWasRotation = false;
   holdLocked = false; // nueva pieza en juego: el hold vuelve a estar disponible
@@ -1005,6 +1064,23 @@ function draw() {
       drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
 }
 
+// Texto y resalte (glow) del panel NEXT según qué tiene de especial la
+// siguiente pieza: power-up y bloque de recompensa se resaltan (highlight);
+// un pentominó solo muestra su nombre, sin glow, al ser una pieza algo más
+// frecuente que las anteriores.
+function getNextPieceLabel(piece) {
+  if (piece.power) {
+    const def = POWERUPS.find(p => p.id === piece.power);
+    return def ? { text: def.name, highlight: true } : null;
+  }
+  if (piece.type === SINGLE_REWARD_COLOR_INDEX) {
+    return { text: 'Bloque único', highlight: true };
+  }
+  const pentomino = PENTOMINOES.find(p => p.colorIndex === piece.type);
+  if (pentomino) return { text: `Pentominó ${pentomino.name}`, highlight: false };
+  return null;
+}
+
 function drawNext() {
   const NB = 30;
   nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
@@ -1014,9 +1090,9 @@ function drawNext() {
   for (let r = 0; r < shape.length; r++)
     for (let c = 0; c < shape[r].length; c++)
       drawBlock(nextCtx, offX + c, offY + r, shape[r][c], NB);
-  const def = next.power && POWERUPS.find(p => p.id === next.power);
-  nextLabelEl.textContent = def ? def.name : '';
-  nextSection.classList.toggle('power-incoming', !!def);
+  const label = getNextPieceLabel(next);
+  nextLabelEl.textContent = label ? label.text : '';
+  nextSection.classList.toggle('power-incoming', !!(label && label.highlight));
   drawPreviewPanel();
 }
 
@@ -1132,6 +1208,7 @@ function init() {
   dropAccum = 0;
   linesSincePowerUp = 0;
   pendingPowerUp = false;
+  pendingSinglePiece = false;
   freezeRemaining = 0;
   combo = 0;
   b2bActive = false;
@@ -1154,7 +1231,7 @@ function init() {
   clearTimeout(clearEffectTimeout);
   clearEffectEl.classList.remove('show');
   lastTime = performance.now();
-  next = randomPiece();
+  next = randomQueuePiece();
   spawn();
   drawHold();
   updateHoldHUD();
