@@ -25,6 +25,17 @@
         </div>
 
         <div class="panel-section">
+          <button id="challenge-btn" class="challenge-btn">🏆 Desafíos</button>
+        </div>
+
+        <div class="panel-section" id="objective-section" hidden>
+          <span class="label">OBJETIVO</span>
+          <span class="objective-desc" id="objective-desc"></span>
+          <div class="objective-bar"><div class="objective-bar-fill" id="objective-bar-fill"></div></div>
+          <span class="objective-value" id="objective-value"></span>
+        </div>
+
+        <div class="panel-section">
           <span class="label">SCORE</span>
           <span class="value" id="score">0</span>
         </div>
@@ -76,6 +87,15 @@
         <p id="overlay-title">GAME OVER</p>
         <p id="overlay-score"></p>
         <button id="restart-btn">Reiniciar</button>
+        <button id="challenge-back-btn" class="secondary-btn" hidden>Volver a desafíos</button>
+      </div>
+    </div>
+
+    <div id="challenge-overlay" class="overlay hidden">
+      <div class="overlay-box challenge-box">
+        <p class="challenge-title">MODO DESAFÍO</p>
+        <div class="challenge-list" id="challenge-list"></div>
+        <button id="challenge-close-btn" class="secondary-btn">Cerrar</button>
       </div>
     </div>
   </div>

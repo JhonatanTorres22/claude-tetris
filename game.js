@@ -19,6 +19,7 @@ const COLORS = [
   '#f06292', // 11 - Tinte
   '#4db6ac', // 12 - Gravedad
   '#4fc3f7', // 13 - Congelar
+  '#546e7a', // 14 - Basura (bloque indestructible del modo desafío "Marea de basura")
 ];
 
 const PIECES = [
@@ -65,6 +66,58 @@ const POWERUPS = [
 const POWERUP_GLYPHS = {};
 POWERUPS.forEach(p => { POWERUP_GLYPHS[p.colorIndex] = p.glyph; });
 
+const GARBAGE_COLOR_INDEX = 14;
+
+// --- Modo desafío ---
+// Cada entrada describe un nivel con objetivo. `targetLines` (si existe) gana
+// al alcanzar ese número de líneas; `timeLimit` (ms) pierde si se agota antes
+// de cumplir `targetLines`; `survivalTime` (ms) gana con solo aguantar vivo
+// ese tiempo. Los flags `presetObstacles`, `invisibleOnGround`/`lockDelay` y
+// `reverseRotationLevel` activan mecánicas especiales (ver init/loop/draw).
+const CHALLENGES = [
+  {
+    id: 'timeattack',
+    name: 'Contrarreloj',
+    icon: '⏱',
+    description: 'Limpia 40 líneas en 2 minutos.',
+    targetLines: 40,
+    timeLimit: 120000,
+  },
+  {
+    id: 'garbage',
+    name: 'Marea de basura',
+    icon: '🌊',
+    description: 'Sobrevive 90s mientras sube basura desde abajo cada 10s.',
+    survivalTime: 90000,
+    garbageInterval: 10000,
+  },
+  {
+    id: 'obstacles',
+    name: 'Terreno accidentado',
+    icon: '🧱',
+    description: 'Tablero con bloques fijos pre-colocados. Limpia 20 líneas.',
+    targetLines: 20,
+    presetObstacles: true,
+  },
+  {
+    id: 'blind',
+    name: 'A ciegas',
+    icon: '🙈',
+    description: 'Las piezas se vuelven invisibles al tocar el suelo. Limpia 15 líneas.',
+    targetLines: 15,
+    invisibleOnGround: true,
+    lockDelay: 500,
+  },
+  {
+    id: 'chaos',
+    name: 'Rotación caótica',
+    icon: '🌀',
+    description: 'Desde el nivel 3 la rotación se invierte. Limpia 25 líneas.',
+    targetLines: 25,
+    reverseRotationLevel: 3,
+  },
+];
+
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const nextCanvas = document.getElementById('next-canvas');
@@ -85,12 +138,27 @@ const statusEl = document.getElementById('powerup-status');
 const comboSection = document.getElementById('combo-section');
 const comboValueEl = document.getElementById('combo-value');
 const clearEffectEl = document.getElementById('clear-effect');
+const challengeBtn = document.getElementById('challenge-btn');
+const challengeOverlay = document.getElementById('challenge-overlay');
+const challengeListEl = document.getElementById('challenge-list');
+const challengeCloseBtn = document.getElementById('challenge-close-btn');
+const challengeBackBtn = document.getElementById('challenge-back-btn');
+const objectiveSection = document.getElementById('objective-section');
+const objectiveDescEl = document.getElementById('objective-desc');
+const objectiveBarFillEl = document.getElementById('objective-bar-fill');
+const objectiveValueEl = document.getElementById('objective-value');
 
 const THEME_STORAGE_KEY = 'tetris-theme';
 
 let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
 let linesSincePowerUp, pendingPowerUp, freezeRemaining;
 let combo, b2bActive, lastActionWasRotation, pendingTSpin, clearEffectTimeout;
+// Modo desafío: `challengeMode` es null en modo libre o una entrada de
+// CHALLENGES mientras un desafío está activo. `groundedAccum` cuenta cuánto
+// lleva la pieza actual apoyada sin poder bajar (usado por el lock delay de
+// "A ciegas"); `challengeGarbageAccum` acumula tiempo para la siguiente fila
+// de basura; `challengeOutcome` evita evaluar el resultado más de una vez.
+let challengeMode, challengeElapsed, challengeGarbageAccum, groundedAccum, challengeOutcome;
 
 function getCSSVar(name, fallback) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -155,8 +223,16 @@ function rotateCW(shape) {
   return result;
 }
 
+function rotateCCW(shape) {
+  // Sin tabla propia: tres rotaciones CW equivalen a una CCW.
+  return rotateCW(rotateCW(rotateCW(shape)));
+}
+
 function tryRotate() {
-  const rotated = rotateCW(current.shape);
+  // Desafío "Rotación caótica": a partir de reverseRotationLevel, el giro
+  // se invierte (CW se convierte en CCW y viceversa).
+  const reversed = challengeMode && challengeMode.reverseRotationLevel && level >= challengeMode.reverseRotationLevel;
+  const rotated = reversed ? rotateCCW(current.shape) : rotateCW(current.shape);
   const kicks = [0, -1, 1, -2, 2];
   for (const kick of kicks) {
     if (!collide(rotated, current.x + kick, current.y)) {
@@ -349,9 +425,11 @@ function softDrop() {
     current.y++;
     score += 1;
     updateHUD();
-  } else {
+  } else if (!(challengeMode && challengeMode.lockDelay)) {
     lockPiece();
   }
+  // Con lock delay activo, al tocar suelo no se fija de inmediato: el
+  // temporizador de loop() se encarga (deja tiempo a corregir a ciegas).
 }
 
 function lockPiece() {
@@ -386,7 +464,169 @@ function updateHUD() {
   powerupCountdownEl.textContent = POWERUP_INTERVAL - linesSincePowerUp;
   comboSection.hidden = combo <= 1;
   if (combo > 1) comboValueEl.textContent = `x${combo}`;
+  updateObjectiveHUD();
 }
+
+// --- Modo desafío: menú, arranque y mecánicas especiales ---
+
+function formatTime(ms) {
+  const total = Math.ceil(Math.max(0, ms) / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function updateObjectiveHUD() {
+  if (!challengeMode) {
+    objectiveSection.hidden = true;
+    return;
+  }
+  objectiveSection.hidden = false;
+  objectiveDescEl.textContent = challengeMode.description;
+  let progress = 0;
+  let valueText = '';
+  if (challengeMode.timeLimit) {
+    progress = lines / challengeMode.targetLines;
+    valueText = `${lines}/${challengeMode.targetLines} líneas · quedan ${formatTime(challengeMode.timeLimit - challengeElapsed)}`;
+  } else if (challengeMode.survivalTime) {
+    progress = challengeElapsed / challengeMode.survivalTime;
+    valueText = `Aguanta ${formatTime(challengeMode.survivalTime - challengeElapsed)}`;
+  } else if (challengeMode.targetLines) {
+    progress = lines / challengeMode.targetLines;
+    valueText = `${lines}/${challengeMode.targetLines} líneas`;
+  }
+  objectiveBarFillEl.style.width = `${Math.min(100, Math.max(0, progress * 100))}%`;
+  objectiveValueEl.textContent = valueText;
+}
+
+// Genera un tablero con bloques fijos pre-colocados en las filas inferiores
+// para el desafío "Terreno accidentado". Deja siempre 3 huecos por fila para
+// que nunca aparezca una línea ya completa al iniciar.
+function generatePresetBoard() {
+  const b = createBoard();
+  const filledRows = 6;
+  for (let r = ROWS - filledRows; r < ROWS; r++) {
+    const gaps = new Set();
+    while (gaps.size < 3) gaps.add(Math.floor(Math.random() * COLS));
+    for (let c = 0; c < COLS; c++) {
+      if (!gaps.has(c)) b[r][c] = Math.floor(Math.random() * 8) + 1;
+    }
+  }
+  return b;
+}
+
+// Desafío "Marea de basura": sube una fila indestructible desde abajo cada
+// `garbageInterval` ms, descartando la fila superior. La pieza activa sube
+// con el tablero; si queda aplastada contra el techo, termina la partida.
+function addGarbageRow() {
+  board.shift();
+  const gapCol = Math.floor(Math.random() * COLS);
+  const row = new Array(COLS).fill(GARBAGE_COLOR_INDEX);
+  row[gapCol] = 0;
+  board.push(row);
+  current.y -= 1;
+  if (collide(current.shape, current.x, current.y)) {
+    endGame();
+  }
+}
+
+function checkChallengeOutcome() {
+  if (!challengeMode || challengeOutcome || gameOver) return;
+  if (challengeMode.targetLines && lines >= challengeMode.targetLines) {
+    endChallenge(true);
+  } else if (challengeMode.survivalTime && challengeElapsed >= challengeMode.survivalTime) {
+    endChallenge(true);
+  } else if (challengeMode.timeLimit && challengeElapsed >= challengeMode.timeLimit) {
+    endChallenge(false);
+  }
+}
+
+function endChallenge(won) {
+  challengeOutcome = won ? 'win' : 'lose';
+  gameOver = true;
+  cancelAnimationFrame(animId);
+  overlayTitle.textContent = won ? '¡DESAFÍO SUPERADO!' : 'DESAFÍO FALLIDO';
+  overlayScore.textContent = `Puntuación: ${score.toLocaleString()} · Líneas: ${lines}`;
+  challengeBackBtn.hidden = false;
+  overlay.classList.remove('hidden');
+}
+
+function renderChallengeList() {
+  challengeListEl.innerHTML = '';
+
+  const freeCard = document.createElement('div');
+  freeCard.className = 'challenge-card free-mode-card';
+  freeCard.innerHTML = `
+    <span class="challenge-icon">🎮</span>
+    <div class="challenge-info">
+      <span class="challenge-name">Modo libre</span>
+      <span class="challenge-desc">Tetris clásico sin objetivos ni límite de tiempo.</span>
+    </div>
+  `;
+  const freeBtn = document.createElement('button');
+  freeBtn.className = 'challenge-play-btn';
+  freeBtn.textContent = 'Jugar';
+  freeBtn.addEventListener('click', startFreeMode);
+  freeCard.appendChild(freeBtn);
+  challengeListEl.appendChild(freeCard);
+
+  CHALLENGES.forEach(ch => {
+    const card = document.createElement('div');
+    card.className = 'challenge-card';
+    card.innerHTML = `
+      <span class="challenge-icon">${ch.icon}</span>
+      <div class="challenge-info">
+        <span class="challenge-name">${ch.name}</span>
+        <span class="challenge-desc">${ch.description}</span>
+      </div>
+    `;
+    const playBtn = document.createElement('button');
+    playBtn.className = 'challenge-play-btn';
+    playBtn.textContent = 'Jugar';
+    playBtn.addEventListener('click', () => startChallenge(ch));
+    card.appendChild(playBtn);
+    challengeListEl.appendChild(card);
+  });
+}
+
+function openChallengeMenu() {
+  cancelAnimationFrame(animId);
+  challengeOverlay.classList.remove('hidden');
+}
+
+function closeChallengeMenu() {
+  challengeOverlay.classList.add('hidden');
+}
+
+function startChallenge(challenge) {
+  closeChallengeMenu();
+  challengeMode = challenge;
+  init();
+}
+
+function startFreeMode() {
+  closeChallengeMenu();
+  challengeMode = null;
+  init();
+}
+
+challengeBtn.addEventListener('click', openChallengeMenu);
+challengeCloseBtn.addEventListener('click', () => {
+  closeChallengeMenu();
+  if (gameOver) {
+    // Se abrió el menú desde la pantalla de fin de partida: al cerrar sin
+    // elegir nada, esa pantalla debe seguir visible en vez de dejar el
+    // tablero congelado sin overlay.
+    overlay.classList.remove('hidden');
+  } else if (!paused) {
+    lastTime = performance.now();
+    animId = requestAnimationFrame(loop);
+  }
+});
+challengeBackBtn.addEventListener('click', () => {
+  overlay.classList.add('hidden');
+  openChallengeMenu();
+});
 
 // --- Efectos visuales y sonoros del modo combo ---
 
@@ -504,6 +744,11 @@ function draw() {
     for (let c = 0; c < COLS; c++)
       drawBlock(ctx, c, r, board[r][c], BLOCK);
 
+  // Desafío "A ciegas": mientras la pieza lleva apoyada en el suelo (dentro
+  // del lock delay), ni ella ni su ghost se dibujan.
+  const blind = challengeMode && challengeMode.invisibleOnGround && groundedAccum > 0;
+  if (blind) return;
+
   // ghost
   const gy = ghostY();
   for (let r = 0; r < current.shape.length; r++)
@@ -533,8 +778,9 @@ function drawNext() {
 
 function endGame() {
   gameOver = true;
+  if (challengeMode) challengeOutcome = 'lose';
   cancelAnimationFrame(animId);
-  overlayTitle.textContent = 'GAME OVER';
+  overlayTitle.textContent = challengeMode ? 'DESAFÍO FALLIDO' : 'GAME OVER';
   overlayScore.textContent = `Puntuación: ${score.toLocaleString()}`;
   overlay.classList.remove('hidden');
 }
@@ -557,8 +803,47 @@ function loop(ts) {
   if (gameOver) return;
   const dt = ts - lastTime;
   lastTime = ts;
+
+  if (challengeMode) {
+    challengeElapsed += dt;
+    if (challengeMode.garbageInterval) {
+      challengeGarbageAccum += dt;
+      while (challengeGarbageAccum >= challengeMode.garbageInterval && !gameOver) {
+        challengeGarbageAccum -= challengeMode.garbageInterval;
+        addGarbageRow();
+      }
+    }
+    checkChallengeOutcome();
+    updateObjectiveHUD();
+    if (gameOver) {
+      draw();
+      return;
+    }
+  }
+
   if (freezeRemaining > 0) {
     freezeRemaining = Math.max(0, freezeRemaining - dt);
+  } else if (challengeMode && challengeMode.lockDelay) {
+    // Desafío "A ciegas": la pieza no se fija en el instante en que toca
+    // suelo, sino tras `lockDelay` ms apoyada (independiente de dropInterval).
+    if (collide(current.shape, current.x, current.y + 1)) {
+      groundedAccum += dt;
+      if (groundedAccum >= challengeMode.lockDelay) {
+        groundedAccum = 0;
+        lockPiece();
+        if (gameOver) {
+          draw();
+          return;
+        }
+      }
+    } else {
+      groundedAccum = 0;
+      dropAccum += dt;
+      if (dropAccum >= dropInterval) {
+        dropAccum = 0;
+        current.y++;
+      }
+    }
   } else {
     dropAccum += dt;
     if (dropAccum >= dropInterval) {
@@ -580,7 +865,7 @@ function loop(ts) {
 }
 
 function init() {
-  board = createBoard();
+  board = (challengeMode && challengeMode.presetObstacles) ? generatePresetBoard() : createBoard();
   score = 0;
   lines = 0;
   level = 1;
@@ -595,6 +880,10 @@ function init() {
   b2bActive = false;
   lastActionWasRotation = false;
   pendingTSpin = false;
+  challengeElapsed = 0;
+  challengeGarbageAccum = 0;
+  groundedAccum = 0;
+  challengeOutcome = null;
   clearTimeout(clearEffectTimeout);
   clearEffectEl.classList.remove('show');
   lastTime = performance.now();
@@ -603,11 +892,13 @@ function init() {
   updateHUD();
   updateFreezeIndicator();
   overlay.classList.add('hidden');
+  challengeBackBtn.hidden = !challengeMode;
   cancelAnimationFrame(animId);
   animId = requestAnimationFrame(loop);
 }
 
 document.addEventListener('keydown', e => {
+  if (!challengeOverlay.classList.contains('hidden')) return;
   if (e.code === 'KeyP') { togglePause(); return; }
   if (paused || gameOver) return;
   switch (e.code) {
@@ -638,4 +929,5 @@ document.addEventListener('keydown', e => {
 restartBtn.addEventListener('click', init);
 
 initTheme();
+renderChallengeList();
 init();
