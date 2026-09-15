@@ -8,22 +8,20 @@
 </head>
 <body>
   <div class="wrapper">
-    <h1 class="game-title">TETRIS</h1>
-    <div class="game-container">
-      <div class="board-wrap">
-        <canvas id="board" width="300" height="600"></canvas>
-        <div id="clear-effect" class="clear-effect"></div>
+    <div class="top-bar">
+      <span class="top-bar-spacer" aria-hidden="true"></span>
+      <h1 class="game-title">TETRIS</h1>
+      <div class="theme-toggle-wrap">
+        <span class="label">MODO CLARO</span>
+        <label class="theme-switch">
+          <input type="checkbox" id="theme-toggle" aria-label="Alternar modo claro/oscuro" />
+          <span class="slider"></span>
+        </label>
       </div>
+    </div>
 
-      <aside class="panel">
-        <div class="panel-section theme-section">
-          <span class="label">MODO CLARO</span>
-          <label class="theme-switch">
-            <input type="checkbox" id="theme-toggle" aria-label="Alternar modo claro/oscuro" />
-            <span class="slider"></span>
-          </label>
-        </div>
-
+    <div class="game-container">
+      <aside class="panel panel-left">
         <div class="panel-section">
           <button id="challenge-btn" class="challenge-btn">🏆 Desafíos</button>
         </div>
@@ -35,44 +33,57 @@
           <span class="objective-value" id="objective-value"></span>
         </div>
 
-        <div class="panel-section">
-          <span class="label">SCORE</span>
-          <span class="value" id="score">0</span>
-        </div>
-        <div class="panel-section">
-          <span class="label">LINES</span>
-          <span class="value" id="lines">0</span>
-        </div>
-        <div class="panel-section">
-          <span class="label">LEVEL</span>
-          <span class="value" id="level">1</span>
-        </div>
-
-        <div class="panel-section" id="combo-section" hidden>
-          <span class="label">COMBO</span>
-          <span class="value combo-value" id="combo-value">x2</span>
+        <div class="stats-row">
+          <div class="panel-section">
+            <span class="label">SCORE</span>
+            <span class="value" id="score">0</span>
+          </div>
+          <div class="panel-section">
+            <span class="label">LINES</span>
+            <span class="value" id="lines">0</span>
+          </div>
+          <div class="panel-section">
+            <span class="label">LEVEL</span>
+            <span class="value" id="level">1</span>
+          </div>
         </div>
 
-        <div class="panel-section">
-          <span class="label">POWER-UP EN</span>
-          <span class="value" id="powerup-countdown">10</span>
-        </div>
+        <div class="stats-row">
+          <div class="panel-section" id="combo-section" hidden>
+            <span class="label">COMBO</span>
+            <span class="value combo-value" id="combo-value">x2</span>
+          </div>
 
+          <div class="panel-section">
+            <span class="label">POWER-UP EN</span>
+            <span class="value" id="powerup-countdown">10</span>
+          </div>
+        </div>
+      </aside>
+
+      <div class="board-wrap">
+        <canvas id="board" width="300" height="600"></canvas>
+        <div id="clear-effect" class="clear-effect"></div>
+      </div>
+
+      <aside class="panel panel-right">
         <div class="panel-section" id="skills-section">
           <span class="label">HABILIDADES</span>
           <div class="skill-bar"><div class="skill-bar-fill" id="skill-bar-fill"></div></div>
           <div class="skills-row" id="skill-icons"></div>
         </div>
 
-        <div class="panel-section" id="next-section">
-          <span class="label">NEXT</span>
-          <canvas id="next-canvas" width="120" height="120"></canvas>
-          <span class="next-power-label" id="next-label"></span>
-        </div>
+        <div class="dual-row">
+          <div class="panel-section" id="next-section">
+            <span class="label">NEXT</span>
+            <canvas id="next-canvas" width="120" height="120"></canvas>
+            <span class="next-power-label" id="next-label"></span>
+          </div>
 
-        <div class="panel-section" id="hold-section">
-          <span class="label">HOLD <span id="hold-lock-label" class="hold-lock-label" hidden>🔒</span></span>
-          <canvas id="hold-canvas" width="80" height="80"></canvas>
+          <div class="panel-section" id="hold-section">
+            <span class="label">HOLD <span id="hold-lock-label" class="hold-lock-label" hidden>🔒</span></span>
+            <canvas id="hold-canvas" width="80" height="80"></canvas>
+          </div>
         </div>
 
         <div class="panel-section" id="preview-section" hidden>
@@ -85,8 +96,8 @@
           <span class="status-value" id="powerup-status"></span>
         </div>
 
-        <div class="panel-section controls">
-          <span class="label">CONTROLS</span>
+        <details class="panel-section controls" id="controls-section">
+          <summary class="label">CONTROLS</summary>
           <ul>
             <li><kbd>←</kbd><kbd>→</kbd> mover</li>
             <li><kbd>↑</kbd> rotar</li>
@@ -96,7 +107,7 @@
             <li><kbd>P</kbd> pausa</li>
             <li><kbd>1</kbd>–<kbd>4</kbd> habilidad</li>
           </ul>
-        </div>
+        </details>
       </aside>
     </div>
 

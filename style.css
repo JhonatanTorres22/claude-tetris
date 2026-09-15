@@ -4,6 +4,14 @@
   padding: 0;
 }
 
+/* Varias secciones del panel combinan `hidden` con una clase que fija
+   `display` (p. ej. .panel-section{display:flex}); sin este refuerzo el
+   display de la clase gana por origen de cascada y el atributo hidden deja
+   de ocultar visualmente el elemento. */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --bg-color: #0f0f17;
   --text-color: #e0e0e0;
@@ -50,10 +58,34 @@ body {
   min-height: 100vh;
   user-select: none;
   transition: background-color 0.2s, color 0.2s;
+  overflow-x: hidden;
+  padding: 16px 12px;
 }
 
 .wrapper {
   position: relative;
+  width: 100%;
+  max-width: 700px;
+}
+
+/* ---- Barra superior: título centrado + interruptor de tema en el extremo ---- */
+.top-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.top-bar-spacer,
+.top-bar .game-title,
+.theme-toggle-wrap {
+  flex: 1;
+}
+
+.theme-toggle-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .game-title {
@@ -62,22 +94,26 @@ body {
   font-weight: 800;
   letter-spacing: 10px;
   color: var(--accent-color);
-  margin-bottom: 16px;
   text-shadow: 0 0 20px rgba(122, 162, 247, 0.5);
 }
 
 .game-container {
-  display: flex;
+  display: grid;
+  grid-template-columns: 150px 300px 170px;
+  grid-template-areas: "left board right";
   gap: 20px;
-  align-items: flex-start;
+  justify-content: center;
+  align-items: start;
 }
 
-.board-wrap {
-  position: relative;
-}
+.panel-left { grid-area: left; }
+.board-wrap { grid-area: board; position: relative; }
+.panel-right { grid-area: right; }
 
 #board {
   display: block;
+  max-width: 100%;
+  height: auto;
   border: 1px solid var(--border-color);
   background: var(--panel-bg);
   border-radius: 4px;
@@ -119,13 +155,13 @@ body {
 .clear-effect.effect-tspin  { color: #ba68c8; font-size: 24px; }
 .clear-effect.effect-perfect { color: #81c784; font-size: 30px; }
 
-/* ---- Panel lateral ---- */
+/* ---- Paneles laterales ---- */
 .panel {
-  width: 160px;
   display: flex;
   flex-direction: column;
   gap: 20px;
   padding-top: 4px;
+  min-width: 0;
 }
 
 .panel-section {
@@ -134,10 +170,12 @@ body {
   gap: 6px;
 }
 
-.panel-section.theme-section {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
+/* En escritorio estos wrappers son transparentes al layout: sus hijos se
+   comportan como si fueran hijos directos de .panel. En mobile (media query
+   más abajo) pasan a ser filas flex para ahorrar espacio vertical. */
+.stats-row,
+.dual-row {
+  display: contents;
 }
 
 .label {
@@ -157,6 +195,8 @@ body {
 
 #next-canvas {
   display: block;
+  max-width: 100%;
+  height: auto;
   border: 1px solid var(--border-color);
   background: var(--panel-bg);
   border-radius: 4px;
@@ -249,6 +289,8 @@ body {
 #hold-canvas,
 #preview-canvas {
   display: block;
+  max-width: 100%;
+  height: auto;
   border: 1px solid var(--border-color);
   background: var(--panel-bg);
   border-radius: 4px;
@@ -382,11 +424,44 @@ body {
 }
 
 /* ---- Controles ---- */
+.controls summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.controls summary::-webkit-details-marker {
+  display: none;
+}
+
+.controls summary::before {
+  content: '▸';
+  display: inline-block;
+  font-size: 9px;
+  color: var(--label-color);
+  transition: transform 0.15s;
+}
+
+.controls[open] summary::before {
+  transform: rotate(90deg);
+}
+
 .controls ul {
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-top: 8px;
+}
+
+/* El navegador colapsa el contenido de <details> cerrado vía una regla UA
+   (`details:not([open]) > *:not(summary){display:none}`); como .controls ul
+   fija su propio `display`, necesitamos re-declararlo con más especificidad
+   para que el colapso siga funcionando. */
+.controls:not([open]) ul {
+  display: none;
 }
 
 .controls li {
@@ -561,4 +636,124 @@ kbd {
 
 .challenge-play-btn:hover {
   background: var(--accent-color-hover);
+}
+
+/* ================================================================
+   RESPONSIVE
+   En escritorio .game-container es una grid de 3 columnas (izquierda /
+   tablero / derecha, ~660px de ancho mínimo). Por debajo de 760px ya no
+   entran lado a lado: el tablero se escala fluido y pasa arriba (via
+   order), y las columnas izquierda/derecha se apilan debajo comprimiendo
+   stats/next-hold en filas para que todo quepa sin bajar hasta el final.
+   ================================================================ */
+@media (max-width: 760px) {
+  body {
+    align-items: flex-start;
+    padding: 16px 12px 32px;
+  }
+
+  .wrapper {
+    margin: 0 auto;
+  }
+
+  .top-bar {
+    margin-bottom: 12px;
+  }
+
+  .theme-toggle-wrap .label {
+    display: none;
+  }
+
+  .game-title {
+    font-size: 22px;
+    letter-spacing: 6px;
+  }
+
+  /* El tablero deja de ir entre las dos columnas: pasa arriba del todo y
+     izquierda/derecha se apilan debajo, en ese orden, sin importar su
+     posición en el HTML. */
+  .game-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .board-wrap {
+    order: -1;
+    width: min(100%, 300px);
+  }
+
+  .panel-left {
+    order: 0;
+  }
+
+  .panel-right {
+    order: 1;
+  }
+
+  .panel-left,
+  .panel-right {
+    width: 100%;
+    max-width: 340px;
+    gap: 12px;
+    padding-top: 0;
+  }
+
+  .value {
+    font-size: 20px;
+  }
+
+  .stats-row {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+  }
+
+  .stats-row .panel-section {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .dual-row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .dual-row .panel-section {
+    flex: 1;
+    min-width: 0;
+  }
+
+  #next-canvas {
+    max-width: 120px;
+  }
+
+  #hold-canvas {
+    max-width: 80px;
+  }
+
+  .controls ul {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;
+  }
+}
+
+@media (max-width: 380px) {
+  .game-title {
+    font-size: 18px;
+    letter-spacing: 4px;
+  }
+
+  .board-wrap {
+    width: min(100%, 250px);
+  }
+
+  .panel-left,
+  .panel-right {
+    max-width: 280px;
+  }
 }
